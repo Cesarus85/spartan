@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Block-Halo – XR Polished (Bloom + Light Shadows)</title>
+<title>Block-Halo – Clean (Light Shadows, no Bloom)</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
   #hud{position:absolute;left:12px;bottom:12px;color:#eee;background:rgba(0,0,0,.45);padding:8px 10px;border-radius:8px;font:12px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;z-index:10}
@@ -22,18 +22,14 @@
 <script type="module">
 import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 /*** === SWITCHES === ***/
-const BLOOM = true;          // dezente Bloom-Note
 const LIGHT_SHADOWS = true;  // Boden empfängt Schatten, Spieler/Arme/Waffe werfen
 
 /*** === RENDERER/SCENE === ***/
 const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:'high-performance' });
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1)); // Quest-freundlich
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
 renderer.xr.enabled = true;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -48,7 +44,7 @@ document.body.appendChild(VRButton.createButton(renderer));
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x98cfff, 34, 150);
 
-// Sehr naher Near-Clip, damit man Arme/Waffe nahe am HMD sieht
+// sehr naher Near-Clip, damit Arme/Waffe nah am HMD nicht weggeschnitten werden
 const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.02, 1200);
 
 /*** === LIGHTING === ***/
@@ -64,17 +60,6 @@ if (LIGHT_SHADOWS){
   sun.shadow.camera.top = 120; sun.shadow.camera.bottom = -120;
 }
 scene.add(sun);
-
-/*** === BLOOM (WebXR-fähig) === ***/
-let composer = null;
-if (BLOOM){
-  composer = new EffectComposer(renderer);
-  composer.xr = renderer.xr;                            // WICHTIG für WebXR
-  composer.addPass(new RenderPass(scene, camera));
-  // dezent: nur emissive/helle Teile „glühen“ leicht
-  const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.45, 0.8, 0.86);
-  composer.addPass(bloom);
-}
 
 /*** === PLAYER RIG === ***/
 const player = new THREE.Group();
@@ -114,7 +99,7 @@ ring.rotation.z = Math.PI*0.07;
 ring.position.set(-60, 250, -80);
 scene.add(ring);
 
-/*** === TINY PIXEL TEXTURES === ***/
+/*** === TINY PIXEL TEXTURES (subtil) === ***/
 function makePixelTex(pixelsFn){
   const s = 8;
   const cnv = document.createElement('canvas'); cnv.width = cnv.height = s;
@@ -157,7 +142,6 @@ const mDirt   = new THREE.MeshStandardMaterial({ map:texDirt,  roughness:0.98, m
 const mRock   = new THREE.MeshStandardMaterial({ map:texRock,  roughness:0.9,  metalness:0.04 });
 const mSteel  = new THREE.MeshStandardMaterial({ map:texSteel, roughness:0.62, metalness:0.55 });
 const mAccent = new THREE.MeshStandardMaterial({ color:0x2ec5ff, emissive:0x0a3d4e, emissiveIntensity:0.9, metalness:0.9, roughness:0.18 });
-
 [mGrass,mDirt,mRock,mSteel].forEach(m=>{ m.map.repeat.set(1.5,1.5); });
 
 /*** === INSTANCER === ***/
@@ -170,7 +154,8 @@ class Instancer {
   finalize(scene){
     this.mesh.instanceMatrix.needsUpdate = true;
     this.mesh.count = this.count;
-    this.mesh.castShadow = false;        // keine Schatten auf tausenden Blöcken
+    // keine Schatten auf tausenden Blöcken
+    this.mesh.castShadow = false;
     this.mesh.receiveShadow = false;
     scene.add(this.mesh);
   }
@@ -199,7 +184,6 @@ function heightAt(ix,iz){
   const wav = (Math.sin(ix*0.35)+Math.cos(iz*0.29))*0.8 + Math.sin((ix+iz)*0.18)*0.6;
   return Math.max(Math.floor(hill*0.5 + plateau + wav), 1);
 }
-
 // Bodenplatte (empfängt Schatten)
 const ground = new THREE.Mesh(
   new THREE.PlaneGeometry(1000,1000),
@@ -346,7 +330,7 @@ function makeRightHand(){
 }
 function clearChildren(obj){ while(obj.children.length) obj.remove(obj.children[0]); }
 
-// „connected“ → sicher Hands/Arms anhängen (egal ob Index 0 oder 1)
+// „connected“ → Hände/Arme sicher anhängen (egal ob Index 0 oder 1)
 [controller0, controller1].forEach(ctrl=>{
   ctrl.addEventListener('connected', (e)=>{
     const handed = e.data?.handedness || e.data?.profiles?.[0] || '';
@@ -354,7 +338,7 @@ function clearChildren(obj){ while(obj.children.length) obj.remove(obj.children[
     if (handed === 'left')  ctrl.add(makeLeftArmWithGun());
     else if (handed === 'right') ctrl.add(makeRightHand());
     else ctrl.add(makeRightHand()); // Fallback
-    ctrl.position.z -= 0.02; // etwas nach vorne, gegen Clipping
+    ctrl.position.z -= 0.02; // leicht nach vorne, gegen Clipping
   });
 });
 
@@ -423,24 +407,17 @@ function shoot(){
     if (t<90) requestAnimationFrame(tick); else scene.remove(bolt);
   })();
 
-  // Mündungsblitz + kleiner Bloom-Sprite
+  // Mündungsblitz (ohne Bloom)
   const flash = new THREE.Mesh(new THREE.SphereGeometry(0.03,12,10), new THREE.MeshBasicMaterial({ color:0x9df0ff }));
   flash.position.copy(origin);
   scene.add(flash);
-  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ color:0xbff6ff, transparent:true, opacity:0.75, depthWrite:false, blending:THREE.AdditiveBlending }));
-  glow.scale.set(0.12,0.12,0.12);
-  glow.position.copy(origin);
-  scene.add(glow);
-  setTimeout(()=>{ scene.remove(flash); scene.remove(glow); }, 60);
+  setTimeout(()=>{ scene.remove(flash); }, 60);
 }
 function spawnImpact(p){
   const s = new THREE.Mesh(new THREE.SphereGeometry(0.03,8,6), new THREE.MeshBasicMaterial({ color:0x9df0ff }));
   s.position.copy(p);
   scene.add(s);
-  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ color:0x9df0ff, transparent:true, opacity:0.6, depthWrite:false, blending:THREE.AdditiveBlending }));
-  glow.scale.set(0.1,0.1,0.1); glow.position.copy(p);
-  scene.add(glow);
-  setTimeout(()=>{ scene.remove(s); scene.remove(glow); }, 100);
+  setTimeout(()=>{ scene.remove(s); }, 100);
 }
 
 /*** === INPUT === ***/
@@ -475,23 +452,19 @@ function handleInput(){
   updateJump();
 }
 
-/*** === LOOPS (Composer in VR nutzen) === ***/
+/*** === LOOP === ***/
 let last = performance.now();
-const frame = ()=>{
+renderer.setAnimationLoop(()=>{
   const now = performance.now(); const dt = now-last; last=now;
   handleInput();
-  if (BLOOM) composer.render(); else renderer.render(scene, camera);
-};
-// WICHTIG: In WebXR den AnimationLoop am Composer registrieren
-if (BLOOM) composer.setAnimationLoop(frame);
-else renderer.setAnimationLoop(frame);
+  renderer.render(scene, camera);
+});
 
 /*** === RESIZE === ***/
 addEventListener('resize', ()=>{
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
-  if (BLOOM) composer.setSize(innerWidth, innerHeight);
 });
 
 /*** === START POSITION === ***/
