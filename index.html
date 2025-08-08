@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Block-Halo – Bloom & Light Shadows</title>
+<title>Block-Halo – XR Polished (Bloom + Light Shadows)</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
-  #hud{position:absolute;left:12px;bottom:12px;color:#eee;background:rgba(0,0,0,.45);padding:8px 10px;border-radius:8px;font:12px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  #hud{position:absolute;left:12px;bottom:12px;color:#eee;background:rgba(0,0,0,.45);padding:8px 10px;border-radius:8px;font:12px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;z-index:10}
 </style>
 <script type="importmap">
 {
@@ -28,17 +28,16 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 
 /*** === SWITCHES === ***/
 const BLOOM = true;          // dezente Bloom-Note
-const LIGHT_SHADOWS = true;  // Boden empfängt, Spieler/Arme werfen
+const LIGHT_SHADOWS = true;  // Boden empfängt Schatten, Spieler/Arme/Waffe werfen
 
 /*** === RENDERER/SCENE === ***/
 const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:'high-performance' });
 renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1)); // Quest-freundlich
 renderer.xr.enabled = true;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.06;
-// Für XR-Performance (optional):
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
 if (LIGHT_SHADOWS){
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -49,7 +48,7 @@ document.body.appendChild(VRButton.createButton(renderer));
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x98cfff, 34, 150);
 
-// WICHTIG: sehr naher Near-Clip, damit man Arme/Waffe nahe am HMD sieht
+// Sehr naher Near-Clip, damit man Arme/Waffe nahe am HMD sieht
 const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.02, 1200);
 
 /*** === LIGHTING === ***/
@@ -66,12 +65,13 @@ if (LIGHT_SHADOWS){
 }
 scene.add(sun);
 
-/*** === BLOOM (dezent) === ***/
+/*** === BLOOM (WebXR-fähig) === ***/
 let composer = null;
 if (BLOOM){
   composer = new EffectComposer(renderer);
+  composer.xr = renderer.xr;                            // WICHTIG für WebXR
   composer.addPass(new RenderPass(scene, camera));
-  // threshold hoch → nur helle/emissive Teile blühen leicht
+  // dezent: nur emissive/helle Teile „glühen“ leicht
   const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.45, 0.8, 0.86);
   composer.addPass(bloom);
 }
@@ -166,15 +166,11 @@ class Instancer {
     this.mesh = new THREE.InstancedMesh(geo, mat, cap);
     this.count = 0;
   }
-  add(x,y,z){
-    const m = new THREE.Matrix4().makeTranslation(x,y,z);
-    this.mesh.setMatrixAt(this.count++, m);
-  }
+  add(x,y,z){ this.mesh.setMatrixAt(this.count++, new THREE.Matrix4().makeTranslation(x,y,z)); }
   finalize(scene){
     this.mesh.instanceMatrix.needsUpdate = true;
     this.mesh.count = this.count;
-    // Für „Schatten light“ lassen wir InstancedMeshes ohne Schatten (teuer)
-    this.mesh.castShadow = false;
+    this.mesh.castShadow = false;        // keine Schatten auf tausenden Blöcken
     this.mesh.receiveShadow = false;
     scene.add(this.mesh);
   }
@@ -190,7 +186,7 @@ const instancedWorld = [];
 const radiusX = 48, radiusZ = 64;
 const sizeX = radiusX*2+1, sizeZ = radiusZ*2+1;
 const heightMap = new Int16Array(sizeX*sizeZ);
-function idx(ix,iz){ return (iz+radiusZ)*sizeX + (ix+radiusX); }
+const idx = (ix,iz)=> (iz+radiusZ)*sizeX + (ix+radiusX);
 function heightAt(ix,iz){
   const nx = ix / radiusX, nz = iz / radiusZ;
   const d = Math.sqrt(nx*nx + nz*nz);
@@ -203,6 +199,8 @@ function heightAt(ix,iz){
   const wav = (Math.sin(ix*0.35)+Math.cos(iz*0.29))*0.8 + Math.sin((ix+iz)*0.18)*0.6;
   return Math.max(Math.floor(hill*0.5 + plateau + wav), 1);
 }
+
+// Bodenplatte (empfängt Schatten)
 const ground = new THREE.Mesh(
   new THREE.PlaneGeometry(1000,1000),
   new THREE.MeshStandardMaterial({ color:0x2f5f33, roughness:1, metalness:0 })
@@ -212,7 +210,7 @@ ground.position.y = -BLOCK*0.5;
 ground.receiveShadow = LIGHT_SHADOWS;
 scene.add(ground);
 
-// Terrain instanzieren
+// Insel instanzieren
 for (let ix=-radiusX; ix<=radiusX; ix++){
   for (let iz=-radiusZ; iz<=radiusZ; iz++){
     const h = heightAt(ix,iz);
@@ -229,11 +227,13 @@ instancedWorld.push(iGrass.mesh, iDirt.mesh, iRock.mesh);
 /*** === FORTRESS === ***/
 const F = { w: 22, d: 22, h: 14, baseY: 1, doorW:4, doorH:6 };
 const halfW = Math.floor(F.w/2), halfD = Math.floor(F.d/2);
+// Fundament
 for (let x=-halfW; x<halfW; x++){
   for (let z=-halfD; z<halfD; z++){
     iRock.add(x*BLOCK, (F.baseY-1)*BLOCK, z*BLOCK);
   }
 }
+// Mauern + Innenboden
 for (let y=0; y<F.h; y++){
   for (let x=-halfW; x<halfW; x++){
     for (let z=-halfD; z<halfD; z++){
@@ -248,6 +248,7 @@ for (let y=0; y<F.h; y++){
     }
   }
 }
+// Zinnen
 for (let x=-halfW; x<halfW; x+=2){
   iSteel.add(x*BLOCK, (F.baseY+F.h)*BLOCK, -halfD*BLOCK);
   iSteel.add(x*BLOCK, (F.baseY+F.h)*BLOCK, (halfD-1)*BLOCK);
@@ -256,9 +257,11 @@ for (let z=-halfD; z<halfD; z+=2){
   iSteel.add(-halfW*BLOCK, (F.baseY+F.h)*BLOCK, z*BLOCK);
   iSteel.add((halfW-1)*BLOCK, (F.baseY+F.h)*BLOCK, z*BLOCK);
 }
+// Innentreppe
 for (let i=0; i<F.h-2; i++){
   iSteel.add((-halfW+2)*BLOCK, (F.baseY+1+i)*BLOCK, (-halfD+3+i)*BLOCK);
 }
+// Akzente
 for (let y=1; y<F.h-1; y+=3){
   iAccent.add((-halfW+4)*BLOCK, (F.baseY+y)*BLOCK, 0);
   iAccent.add((halfW-5)*BLOCK,   (F.baseY+y)*BLOCK, 0);
@@ -296,21 +299,23 @@ function isBlockedXZ(x,z){
 function makeSpartanBody(){
   const g = new THREE.Group(); g.frustumCulled=false; g.renderOrder = 1;
   const torso = new THREE.Mesh(new THREE.BoxGeometry(0.28,0.32,0.18), new THREE.MeshStandardMaterial({ color:0x2b3a43, metalness:0.5, roughness:0.4 }));
-  torso.position.set(0,0,0);
-  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.30,0.10,0.22), mSteel); chest.position.set(0,0.12,0.0);
-  const belt  = new THREE.Mesh(new THREE.BoxGeometry(0.30,0.08,0.18), mAccent); belt.position.set(0,-0.16,0.01);
-  const pelvis= new THREE.Mesh(new THREE.BoxGeometry(0.26,0.12,0.20), mSteel); pelvis.position.set(0,-0.28,0.02);
-  [torso,chest,belt,pelvis].forEach(m=>{ m.castShadow = LIGHT_SHADOWS; });
+  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.30,0.10,0.22), mSteel);
+  chest.position.set(0,0.12,0.0);
+  const belt  = new THREE.Mesh(new THREE.BoxGeometry(0.30,0.08,0.18), mAccent);
+  belt.position.set(0,-0.16,0.01);
+  const pelvis= new THREE.Mesh(new THREE.BoxGeometry(0.26,0.12,0.20), mSteel);
+  pelvis.position.set(0,-0.28,0.02);
+  ;[torso,chest,belt,pelvis].forEach(m=>{ m.castShadow = LIGHT_SHADOWS; });
   g.add(torso,chest,belt,pelvis);
   return g;
 }
 const bodyAnchor = new THREE.Group();
 camera.add(bodyAnchor);
+// leicht nach vorne/unten, sonst Near-Clip
 bodyAnchor.position.set(0,-0.55,-0.25);
-const spartanBody = makeSpartanBody();
-bodyAnchor.add(spartanBody);
+bodyAnchor.add(makeSpartanBody());
 
-// Controller & sichere Anbindung an „left/right“ via connected
+// Controller-Objekte
 const controller0 = renderer.xr.getController(0);
 const controller1 = renderer.xr.getController(1);
 scene.add(controller0, controller1);
@@ -327,12 +332,10 @@ function makeLeftArmWithGun(){
   barrel.rotation.x = Math.PI/2; barrel.position.set(0.05,0.00,-0.34);
   const sight = new THREE.Mesh(new THREE.BoxGeometry(0.05,0.02,0.07), mAccent);
   sight.position.set(0.05,0.04,-0.20);
-  [forearm,plate,gunBody,barrel,sight].forEach(m=>{ m.castShadow = LIGHT_SHADOWS; });
+  ;[forearm,plate,gunBody,barrel,sight].forEach(m=>{ m.castShadow = LIGHT_SHADOWS; });
   group.add(forearm,plate,gunBody,barrel,sight);
-  // leicht nach vorne kippen
-  group.rotation.y = 0.15;
-  // *Wichtig*: etwas nach vorne schieben, damit nicht im Controller „verschwindet“
-  group.position.z = -0.05;
+  group.rotation.y = 0.15;  // natürlicher Winkel
+  group.position.z = -0.05; // etwas nach vorne
   return group;
 }
 function makeRightHand(){
@@ -341,28 +344,21 @@ function makeRightHand(){
   h.castShadow = LIGHT_SHADOWS;
   return h;
 }
-// Helper: Controller säubern
 function clearChildren(obj){ while(obj.children.length) obj.remove(obj.children[0]); }
 
-// Event-Handler für beide Controller
+// „connected“ → sicher Hands/Arms anhängen (egal ob Index 0 oder 1)
 [controller0, controller1].forEach(ctrl=>{
   ctrl.addEventListener('connected', (e)=>{
     const handed = e.data?.handedness || e.data?.profiles?.[0] || '';
     clearChildren(ctrl);
-    if (handed === 'left'){
-      ctrl.add(makeLeftArmWithGun());
-    } else if (handed === 'right'){
-      ctrl.add(makeRightHand());
-    } else {
-      // Fallback: wenn handedness fehlt, zeig zumindest rechte Hand
-      ctrl.add(makeRightHand());
-    }
-    // Kleiner Vor-Offset, damit nah am HMD nichts clippt:
-    ctrl.position.z -= 0.02;
+    if (handed === 'left')  ctrl.add(makeLeftArmWithGun());
+    else if (handed === 'right') ctrl.add(makeRightHand());
+    else ctrl.add(makeRightHand()); // Fallback
+    ctrl.position.z -= 0.02; // etwas nach vorne, gegen Clipping
   });
 });
 
-// Failsafe: falls „connected“ nicht triggert, nach Session-Start anhängen
+// Failsafe: falls „connected“ nicht feuert
 renderer.xr.addEventListener('sessionstart', ()=>{
   setTimeout(()=>{
     if (controller0.children.length===0 && controller1.children.length===0){
@@ -404,8 +400,9 @@ function shoot(){
   if (now - lastShot < 140) return;
   lastShot = now;
 
-  // Nimm den Controller, der die Waffe trägt (falls index swap)
-  const gunCtrl = controller0.children.length ? controller0 : controller1;
+  // Controller mit Waffe (falls Index-Swap): nimm den, der den linken Arm trägt
+  const gunCtrl = controller0.children.length && controller0.children[0].children?.length ? controller0 :
+                  controller1.children.length ? controller1 : controller0;
   const {origin, dir} = muzzlePose(gunCtrl);
   raycaster.set(origin, dir);
   const hits = raycaster.intersectObjects(instancedWorld, false);
@@ -426,7 +423,7 @@ function shoot(){
     if (t<90) requestAnimationFrame(tick); else scene.remove(bolt);
   })();
 
-  // Mündungsblitz + kleiner Bloom-Sprite (additiv)
+  // Mündungsblitz + kleiner Bloom-Sprite
   const flash = new THREE.Mesh(new THREE.SphereGeometry(0.03,12,10), new THREE.MeshBasicMaterial({ color:0x9df0ff }));
   flash.position.copy(origin);
   scene.add(flash);
@@ -454,6 +451,7 @@ function handleInput(){
   for (const source of session.inputSources){
     if (!source.gamepad) continue;
     const a = source.gamepad.axes, b = source.gamepad.buttons, hand = source.handedness;
+
     if (hand==='left'){
       const xAxis=a[2]||0, yAxis=a[3]||0, dz=0.12;
       if (Math.abs(xAxis)>dz || Math.abs(yAxis)>dz){
@@ -462,10 +460,12 @@ function handleInput(){
         const tryPos = player.position.clone().addScaledVector(fwd, -yAxis*moveSpeed).addScaledVector(right, xAxis*moveSpeed);
         if (!isBlockedXZ(tryPos.x, tryPos.z)){ player.position.x = tryPos.x; player.position.z = tryPos.z; }
       }
-      const trig = b[0]?.pressed;
+      // Trigger kann je nach Gerät b[0] oder b[1] sein → robust prüfen
+      const trig = !!(b[0]?.pressed || b[1]?.pressed);
       if (trig && !leftTriggerDown){ leftTriggerDown=true; shoot(); }
       if (!trig) leftTriggerDown=false;
     }
+
     if (hand==='right'){
       const xAxis = a[2]||0, dz=0.12;
       if (Math.abs(xAxis)>dz) player.rotation.y -= xAxis*rotationSpeed;
@@ -475,13 +475,16 @@ function handleInput(){
   updateJump();
 }
 
-/*** === LOOP === ***/
+/*** === LOOPS (Composer in VR nutzen) === ***/
 let last = performance.now();
-renderer.setAnimationLoop(()=>{
+const frame = ()=>{
   const now = performance.now(); const dt = now-last; last=now;
   handleInput();
   if (BLOOM) composer.render(); else renderer.render(scene, camera);
-});
+};
+// WICHTIG: In WebXR den AnimationLoop am Composer registrieren
+if (BLOOM) composer.setAnimationLoop(frame);
+else renderer.setAnimationLoop(frame);
 
 /*** === RESIZE === ***/
 addEventListener('resize', ()=>{
