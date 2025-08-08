@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Block-Halo – Fast & Smooth</title>
+<title>Block-Halo – Polished</title>
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden}
-  #hud{position:absolute;left:12px;bottom:12px;color:#ddd;background:rgba(0,0,0,.45);padding:8px 10px;border-radius:8px;font:12px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  #hud{position:absolute;left:12px;bottom:12px;color:#eee;background:rgba(0,0,0,.45);padding:8px 10px;border-radius:8px;font:12px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 </style>
 <script type="importmap">
 {
@@ -27,26 +27,24 @@ import { VRButton } from 'three/addons/webxr/VRButton.js';
 const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:'high-performance' });
 renderer.setSize(innerWidth, innerHeight);
 renderer.xr.enabled = true;
-// Schatten optional (für Speed auf Quest: aus):
-const SHADOWS = false;
-renderer.shadowMap.enabled = SHADOWS;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+// optional: Quest-Performance weiter pushen
+// renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
 document.body.appendChild(renderer.domElement);
 document.body.appendChild(VRButton.createButton(renderer));
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x9bc9ff, 40, 180);
-const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1200);
+scene.fog = new THREE.Fog(0x98cfff, 34, 150);
 
-const hemi = new THREE.HemisphereLight(0xbfdfff, 0x334455, 0.6);
+const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.08, 1200);
+
+/*** === LIGHTING === ***/
+const hemi = new THREE.HemisphereLight(0xbfdfff, 0x2a3a44, 0.7);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xffffff, SHADOWS ? 0.85 : 0.65);
+const sun = new THREE.DirectionalLight(0xffffff, 0.75);
 sun.position.set(120, 220, 60);
-if (SHADOWS) {
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(1024,1024);
-  sun.shadow.camera.far = 500;
-}
 scene.add(sun);
 
 /*** === PLAYER RIG === ***/
@@ -61,9 +59,9 @@ const sky = new THREE.Mesh(
   new THREE.ShaderMaterial({
     side: THREE.BackSide,
     uniforms: {
-      top: {value:new THREE.Color(0x86c5ff)},
-      bottom:{value:new THREE.Color(0xbfe3ff)},
-      offset:{value:400}, exponent:{value:0.9}
+      top: {value:new THREE.Color(0x7fc3ff)},
+      bottom:{value:new THREE.Color(0xcfeaff)},
+      offset:{value:420}, exponent:{value:0.9}
     },
     vertexShader: `
       varying vec3 vW;
@@ -80,23 +78,71 @@ scene.add(sky);
 
 const ring = new THREE.Mesh(
   new THREE.TorusGeometry(450, 10, 24, 128),
-  new THREE.MeshPhongMaterial({ color:0xbfdfff, emissive:0x224466, emissiveIntensity:0.25, shininess:60 })
+  new THREE.MeshPhongMaterial({ color:0xc9e6ff, emissive:0x254d66, emissiveIntensity:0.28, shininess:60 })
 );
 ring.rotation.x = Math.PI*0.15;
 ring.rotation.z = Math.PI*0.07;
 ring.position.set(-60, 250, -80);
 scene.add(ring);
 
+/*** === TINY PIXEL TEXTURES (subtil) === ***/
+function makePixelTex(pixelsFn){
+  const s = 8;
+  const cnv = document.createElement('canvas'); cnv.width = cnv.height = s;
+  const ctx = cnv.getContext('2d', { willReadFrequently:true });
+  const img = ctx.createImageData(s, s);
+  for (let y=0;y<s;y++){
+    for (let x=0;x<s;x++){
+      const [r,g,b,a] = pixelsFn(x,y,s);
+      const i = (y*s+x)*4;
+      img.data[i]=r; img.data[i+1]=g; img.data[i+2]=b; img.data[i+3]=a;
+    }
+  }
+  ctx.putImageData(img,0,0);
+  const tex = new THREE.CanvasTexture(cnv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestMipMapLinearFilter;
+  tex.anisotropy = 4;
+  return tex;
+}
+const texGrass = makePixelTex((x,y,s)=>{
+  const base=[74,166,74]; // 0x4aa64a
+  const shade = ((x+y)&1)? 10:-6;
+  return [base[0]+shade, base[1]+shade, base[2]+shade, 255];
+});
+const texDirt  = makePixelTex((x,y,s)=>{
+  const base=[122,86,50];
+  const shade = (x%3===0||y%3===0)? -12:6;
+  return [base[0]+shade, base[1]+shade, base[2]+shade, 255];
+});
+const texRock  = makePixelTex((x,y,s)=>{
+  const base=[123,138,143];
+  const n = ((x*13+y*7)%5)-2;
+  return [base[0]+n, base[1]+n, base[2]+n, 255];
+});
+const texSteel = makePixelTex((x,y,s)=>{
+  const base=[102,127,140];
+  const n = ((x+y)&1)? 8:-4;
+  return [base[0]+n, base[1]+n, base[2]+n, 255];
+});
+
 /*** === MATERIALS & GEO === ***/
 const BLOCK = 0.75;
 const gBlock = new THREE.BoxGeometry(BLOCK, BLOCK, BLOCK);
-const mGrass  = new THREE.MeshStandardMaterial({ color:0x4aa64a, roughness:0.95, metalness:0.0 });
-const mDirt   = new THREE.MeshStandardMaterial({ color:0x7a5632, roughness:0.98, metalness:0.0 });
-const mRock   = new THREE.MeshStandardMaterial({ color:0x7b8a8f, roughness:0.9,  metalness:0.05 });
-const mSteel  = new THREE.MeshStandardMaterial({ color:0x667f8c, roughness:0.6,  metalness:0.6 });
-const mAccent = new THREE.MeshStandardMaterial({ color:0x2ec5ff, emissive:0x093a4a, emissiveIntensity:0.6, metalness:0.9, roughness:0.2 });
+const mGrass  = new THREE.MeshStandardMaterial({ map:texGrass, roughness:0.92, metalness:0.0 });
+const mDirt   = new THREE.MeshStandardMaterial({ map:texDirt,  roughness:0.98, metalness:0.0 });
+const mRock   = new THREE.MeshStandardMaterial({ map:texRock,  roughness:0.9,  metalness:0.04 });
+const mSteel  = new THREE.MeshStandardMaterial({ map:texSteel, roughness:0.62, metalness:0.55 });
+const mAccent = new THREE.MeshStandardMaterial({ color:0x2ec5ff, emissive:0x0a3d4e, emissiveIntensity:0.7, metalness:0.9, roughness:0.18 });
 
-/*** === INSTANCER HELPER === ***/
+// Texture-Tiling (leicht, damit’s nicht matschig wird)
+[mGrass,mDirt,mRock,mSteel].forEach(m=>{
+  m.map.repeat.set(1.5,1.5);
+});
+
+/*** === INSTANCER === ***/
 class Instancer {
   constructor(geo, mat, cap=50000){
     this.mesh = new THREE.InstancedMesh(geo, mat, cap);
@@ -109,9 +155,8 @@ class Instancer {
   finalize(scene){
     this.mesh.instanceMatrix.needsUpdate = true;
     this.mesh.count = this.count;
-    // InstancedMesh-Schatten aus Performancegründen aus
     this.mesh.castShadow = false;
-    this.mesh.receiveShadow = SHADOWS && false;
+    this.mesh.receiveShadow = false;
     scene.add(this.mesh);
   }
 }
@@ -120,13 +165,12 @@ const iDirt  = new Instancer(gBlock, mDirt);
 const iRock  = new Instancer(gBlock, mRock);
 const iSteel = new Instancer(gBlock, mSteel);
 const iAccent= new Instancer(gBlock, mAccent);
-const instancedWorld = []; // für Raycast
+const instancedWorld = [];
 
 /*** === TERRAIN (HEIGHTMAP) === ***/
 const radiusX = 48, radiusZ = 64;
 const sizeX = radiusX*2+1, sizeZ = radiusZ*2+1;
-const heightMap = new Int16Array(sizeX*sizeZ); // Höhen in Block-Layern
-
+const heightMap = new Int16Array(sizeX*sizeZ);
 function idx(ix,iz){ return (iz+radiusZ)*sizeX + (ix+radiusX); }
 function heightAt(ix,iz){
   const nx = ix / radiusX, nz = iz / radiusZ;
@@ -140,15 +184,12 @@ function heightAt(ix,iz){
   const wav = (Math.sin(ix*0.35)+Math.cos(iz*0.29))*0.8 + Math.sin((ix+iz)*0.18)*0.6;
   return Math.max(Math.floor(hill*0.5 + plateau + wav), 1);
 }
-
-// unsichtbare große Bodenplatte (nur als Fallback)
 const ground = new THREE.Mesh(
   new THREE.PlaneGeometry(1000,1000),
-  new THREE.MeshStandardMaterial({ color:0x2e5b2f, roughness:1, metalness:0 })
+  new THREE.MeshStandardMaterial({ color:0x305f33, roughness:1, metalness:0 })
 );
 ground.rotation.x = -Math.PI/2;
 ground.position.y = -BLOCK*0.5;
-ground.receiveShadow = SHADOWS;
 scene.add(ground);
 
 // Terrain instanzieren
@@ -157,39 +198,22 @@ for (let ix=-radiusX; ix<=radiusX; ix++){
     const h = heightAt(ix,iz);
     heightMap[idx(ix,iz)] = h;
     for (let y=0; y<h; y++){
-      const mat = (y===h-1) ? mGrass : (y>=h-3 ? mDirt : mRock);
-      const x = ix*BLOCK, z = iz*BLOCK, Y = y*BLOCK;
-      if (mat===mGrass) iGrass.add(x,Y,z);
-      else if (mat===mDirt) iDirt.add(x,Y,z);
-      else iRock.add(x,Y,z);
+      const mat = (y===h-1) ? iGrass : (y>=h-3 ? iDirt : iRock);
+      mat.add(ix*BLOCK, y*BLOCK, iz*BLOCK);
     }
   }
 }
 iGrass.finalize(scene); iDirt.finalize(scene); iRock.finalize(scene);
 instancedWorld.push(iGrass.mesh, iDirt.mesh, iRock.mesh);
 
-/*** === FORTRESS (INSTANCED) === ***/
+/*** === FORTRESS === ***/
 const F = { w: 22, d: 22, h: 14, baseY: 1, doorW:4, doorH:6 };
 const halfW = Math.floor(F.w/2), halfD = Math.floor(F.d/2);
-function inFortressAABB(x,z){
-  // Außenkiste der Mauern (in Weltkoords, nicht Layer)
-  const minX = (-halfW)*BLOCK, maxX = (halfW-1)*BLOCK;
-  const minZ = (-halfD)*BLOCK, maxZ = (halfD-1)*BLOCK;
-  return x>=minX && x<=maxX && z>=minZ && z<=maxZ;
-}
-function doorway(x,z){
-  // Türöffnung in der Mitte an z≈0 Richtung Süden/Norden
-  const minX = (-F.doorW/2)*BLOCK, maxX = (F.doorW/2-1)*BLOCK;
-  const nearZ = 0;
-  return (x>=minX && x<=maxX && Math.abs(z-nearZ) < BLOCK*1.1);
-}
-// Fundament
 for (let x=-halfW; x<halfW; x++){
   for (let z=-halfD; z<halfD; z++){
     iRock.add(x*BLOCK, (F.baseY-1)*BLOCK, z*BLOCK);
   }
 }
-// Mauern + Innenboden
 for (let y=0; y<F.h; y++){
   for (let x=-halfW; x<halfW; x++){
     for (let z=-halfD; z<halfD; z++){
@@ -204,7 +228,6 @@ for (let y=0; y<F.h; y++){
     }
   }
 }
-// Zinnen
 for (let x=-halfW; x<halfW; x+=2){
   iSteel.add(x*BLOCK, (F.baseY+F.h)*BLOCK, -halfD*BLOCK);
   iSteel.add(x*BLOCK, (F.baseY+F.h)*BLOCK, (halfD-1)*BLOCK);
@@ -213,11 +236,9 @@ for (let z=-halfD; z<halfD; z+=2){
   iSteel.add(-halfW*BLOCK, (F.baseY+F.h)*BLOCK, z*BLOCK);
   iSteel.add((halfW-1)*BLOCK, (F.baseY+F.h)*BLOCK, z*BLOCK);
 }
-// Innentreppe (Rampe)
 for (let i=0; i<F.h-2; i++){
   iSteel.add((-halfW+2)*BLOCK, (F.baseY+1+i)*BLOCK, (-halfD+3+i)*BLOCK);
 }
-// Akzente
 for (let y=1; y<F.h-1; y+=3){
   iAccent.add((-halfW+4)*BLOCK, (F.baseY+y)*BLOCK, 0);
   iAccent.add((halfW-5)*BLOCK,   (F.baseY+y)*BLOCK, 0);
@@ -225,81 +246,25 @@ for (let y=1; y<F.h-1; y+=3){
 iSteel.finalize(scene); iAccent.finalize(scene);
 instancedWorld.push(iSteel.mesh, iAccent.mesh);
 
-/*** === SIMPLE GROUND HEIGHT QUERY === ***/
+/*** === HEIGHT QUERY & SIMPLE COLLISION === ***/
 function groundHeightAt(x,z){
-  // map (x,z) world -> nearest heightMap cell
   const ix = Math.round(x / BLOCK);
   const iz = Math.round(z / BLOCK);
   if (ix<-radiusX || ix>radiusX || iz<-radiusZ || iz>radiusZ) return -BLOCK*0.5;
-  const hLayer = heightMap[idx(ix,iz)];
-  return (hLayer-0.5)*BLOCK;
+  return (heightMap[idx(ix,iz)] - 0.5) * BLOCK;
 }
-
-/*** === CONTROLLERS & VISIBLE BODY === ***/
-const controllerL = renderer.xr.getController(0);
-const controllerR = renderer.xr.getController(1);
-scene.add(controllerL, controllerR);
-
-// Spartan Körper (Torso + Beinschatten-Attrappe)
-function makeSpartanBody(){
-  const g = new THREE.Group();
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.28,0.32,0.18), new THREE.MeshStandardMaterial({ color:0x2b3a43, metalness:0.5, roughness:0.4 }));
-  torso.position.set(0,-0.35,0.02);
-  g.add(torso);
-  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.30,0.10,0.22), mSteel);
-  chest.position.set(0,-0.25,0.00);
-  g.add(chest);
-  const belt = new THREE.Mesh(new THREE.BoxGeometry(0.30,0.08,0.18), mAccent);
-  belt.position.set(0,-0.48,0.01);
-  g.add(belt);
-  // „Beine“ als Dummy (optisch beim Runterschauen)
-  const pelvis = new THREE.Mesh(new THREE.BoxGeometry(0.26,0.12,0.20), mSteel);
-  pelvis.position.set(0,-0.58,0.02);
-  g.add(pelvis);
-  return g;
+function inFortressAABB(x,z){
+  const minX = (-halfW)*BLOCK, maxX=(halfW-1)*BLOCK;
+  const minZ = (-halfD)*BLOCK, maxZ=(halfD-1)*BLOCK;
+  return x>=minX && x<=maxX && z>=minZ && z<=maxZ;
 }
-const spartanBody = makeSpartanBody();
-// an die Kamera hängen, damit man ihn beim Runterschauen sieht
-camera.add(spartanBody);
-
-// Linker Arm + Waffe (an Controller L)
-function makeLeftArmWithGun(){
-  const group = new THREE.Group();
-  const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.10,0.10,0.22), new THREE.MeshStandardMaterial({ color:0x556b78, metalness:0.4, roughness:0.5 }));
-  forearm.position.set(0,-0.02,-0.08);
-  group.add(forearm);
-  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.11,0.05,0.14), mAccent);
-  plate.position.set(0,-0.02,-0.02);
-  group.add(plate);
-  const gunBody = new THREE.Mesh(new THREE.BoxGeometry(0.06,0.08,0.26), new THREE.MeshStandardMaterial({ color:0x2f3940, metalness:0.75, roughness:0.3 }));
-  gunBody.position.set(0.05,0.00,-0.20);
-  group.add(gunBody);
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.012,0.18,10), new THREE.MeshStandardMaterial({ color:0x444, metalness:0.9, roughness:0.2 }));
-  barrel.rotation.x = Math.PI/2;
-  barrel.position.set(0.05,0.00,-0.34);
-  group.add(barrel);
-  const sight = new THREE.Mesh(new THREE.BoxGeometry(0.05,0.02,0.07), mAccent);
-  sight.position.set(0.05,0.04,-0.20);
-  group.add(sight);
-  return group;
+function doorway(x,z){
+  const minX = (-F.doorW/2)*BLOCK, maxX = (F.doorW/2-1)*BLOCK;
+  return (x>=minX && x<=maxX && Math.abs(z) < BLOCK*1.1);
 }
-controllerL.add(makeLeftArmWithGun());
-
-// Rechte Hand blockig
-const rightHand = new THREE.Mesh(new THREE.BoxGeometry(0.08,0.03,0.12), mSteel);
-rightHand.position.set(0,-0.02,-0.05);
-controllerR.add(rightHand);
-
-/*** === MOVEMENT / PHYSICS (vereinfachte Kollision) === ***/
-const moveSpeed = 0.10, rotationSpeed = 0.05, jumpSpeed = 0.30, gravity = 0.01;
-let isJumping=false, jumpVel=0;
-
 function isBlockedXZ(x,z){
-  // Blockiere Festungsmauern, erlaube Tür
   if (!inFortressAABB(x,z)) return false;
-  // Türfenster prüfen
   if (doorway(x,z)) return false;
-  // innerhalb der Mauerdicke nahe Rand blockieren
   const edgeTol = BLOCK*0.9;
   const minX = (-halfW)*BLOCK, maxX=(halfW-1)*BLOCK;
   const minZ = (-halfD)*BLOCK, maxZ=(halfD-1)*BLOCK;
@@ -307,19 +272,73 @@ function isBlockedXZ(x,z){
   return nearEdge;
 }
 
+/*** === VISIBLE BODY & CONTROLLERS === ***/
+function makeSpartanBody(){
+  const g = new THREE.Group(); g.frustumCulled=false; g.renderOrder = 1;
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.28,0.32,0.18), new THREE.MeshStandardMaterial({ color:0x2b3a43, metalness:0.5, roughness:0.4 }));
+  torso.position.set(0,0,0);
+  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.30,0.10,0.22), mSteel); chest.position.set(0,0.12,0.0);
+  const belt  = new THREE.Mesh(new THREE.BoxGeometry(0.30,0.08,0.18), mAccent); belt.position.set(0,-0.16,0.01);
+  const pelvis= new THREE.Mesh(new THREE.BoxGeometry(0.26,0.12,0.20), mSteel); pelvis.position.set(0,-0.28,0.02);
+  g.add(torso,chest,belt,pelvis);
+  return g;
+}
+const bodyAnchor = new THREE.Group();
+camera.add(bodyAnchor);
+// unter die Kamera und leicht nach vorne, damit es nicht am Near-Clip verschwindet
+bodyAnchor.position.set(0,-0.55,-0.25);
+const spartanBody = makeSpartanBody();
+bodyAnchor.add(spartanBody);
+
+// Controller werden erst nach "connected" bestückt (sonst fehlen sie manchmal)
+const controllerL = renderer.xr.getController(0);
+const controllerR = renderer.xr.getController(1);
+scene.add(controllerL, controllerR);
+
+function makeLeftArmWithGun(){
+  const group = new THREE.Group(); group.frustumCulled=false; group.renderOrder = 2;
+  const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.10,0.10,0.22), new THREE.MeshStandardMaterial({ color:0x556b78, metalness:0.4, roughness:0.5 }));
+  forearm.position.set(0,-0.02,-0.08);
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.11,0.05,0.14), mAccent);
+  plate.position.set(0,-0.02,-0.02);
+  const gunBody = new THREE.Mesh(new THREE.BoxGeometry(0.06,0.08,0.26), new THREE.MeshStandardMaterial({ color:0x2f3940, metalness:0.75, roughness:0.3 }));
+  gunBody.position.set(0.05,0.00,-0.20);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.012,0.18,10), new THREE.MeshStandardMaterial({ color:0x444, metalness:0.9, roughness:0.2 }));
+  barrel.rotation.x = Math.PI/2; barrel.position.set(0.05,0.00,-0.34);
+  const sight = new THREE.Mesh(new THREE.BoxGeometry(0.05,0.02,0.07), mAccent);
+  sight.position.set(0.05,0.04,-0.20);
+  group.add(forearm,plate,gunBody,barrel,sight);
+  // kleine Offset-Drehung, damit die Waffe natürlicher nach vorne zeigt
+  group.rotation.y = 0.15;
+  return group;
+}
+function makeRightHand(){
+  const h = new THREE.Mesh(new THREE.BoxGeometry(0.08,0.03,0.12), mSteel);
+  h.position.set(0,-0.02,-0.05); h.frustumCulled=false; h.renderOrder=2; return h;
+}
+controllerL.addEventListener('connected', () => {
+  // Falls mehrfach feuert, vorher löschen
+  controllerL.clear && controllerL.clear();
+  controllerL.add(makeLeftArmWithGun());
+});
+controllerR.addEventListener('connected', () => {
+  controllerR.clear && controllerR.clear();
+  controllerR.add(makeRightHand());
+});
+
+/*** === MOVEMENT / PHYSICS === ***/
+const moveSpeed = 0.10, rotationSpeed = 0.05, jumpSpeed = 0.30, gravity = 0.01;
+let isJumping=false, jumpVel=0;
+
 function updateJump(){
   const gh = groundHeightAt(player.position.x, player.position.z);
-  const target = gh + 1.0; // Augenhöhe
+  const target = gh + 1.0;
   if (isJumping){
     const ny = player.position.y + jumpVel;
     jumpVel -= gravity;
-    if (ny > target){
-      player.position.y = ny;
-    } else {
-      isJumping=false; jumpVel=0; player.position.y = target;
-    }
+    if (ny > target){ player.position.y = ny; }
+    else { isJumping=false; jumpVel=0; player.position.y = target; }
   } else {
-    // weiches „Kleben“ am Boden
     player.position.y += Math.sign(target - player.position.y) * Math.min(Math.abs(target-player.position.y), 0.08);
   }
 }
@@ -327,7 +346,6 @@ function updateJump(){
 /*** === SHOOTING (Hitscan) === ***/
 const raycaster = new THREE.Raycaster();
 let leftTriggerDown=false, lastShot=0;
-
 function muzzlePose(ctrl){
   const m = new THREE.Matrix4().copy(ctrl.matrixWorld);
   const origin = new THREE.Vector3().setFromMatrixPosition(m);
@@ -335,22 +353,16 @@ function muzzlePose(ctrl){
   const muzzle = origin.clone().add(dir.clone().multiplyScalar(0.24));
   return {origin:muzzle, dir};
 }
-
 function shoot(){
   const now = performance.now();
   if (now - lastShot < 140) return;
   lastShot = now;
 
   const {origin, dir} = muzzlePose(controllerL);
-
-  // Hitscan gegen wenige InstancedMeshes -> schnell
   raycaster.set(origin, dir);
   const hits = raycaster.intersectObjects(instancedWorld, false);
-  if (hits.length){
-    spawnImpact(hits[0].point);
-  }
+  if (hits.length){ spawnImpact(hits[0].point); }
 
-  // sichtbarer „Bolt“ als Feedback (kurzlebig)
   const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.01,0.01,0.22,8),
     new THREE.MeshStandardMaterial({ color:0x7fe8ff, emissive:0x2ec5ff, emissiveIntensity:1.2, metalness:0.1, roughness:0.2 })
   );
@@ -365,13 +377,11 @@ function shoot(){
     if (t<90) requestAnimationFrame(tick); else scene.remove(bolt);
   })();
 
-  // Mündungsblitz
   const flash = new THREE.Mesh(new THREE.SphereGeometry(0.03,8,6), new THREE.MeshBasicMaterial({ color:0x9df0ff }));
   flash.position.copy(origin);
   scene.add(flash);
   setTimeout(()=>scene.remove(flash), 40);
 }
-
 function spawnImpact(p){
   const s = new THREE.Mesh(new THREE.SphereGeometry(0.03,6,4), new THREE.MeshBasicMaterial({ color:0x9df0ff }));
   s.position.copy(p);
@@ -386,36 +396,27 @@ function handleInput(){
 
   for (const source of session.inputSources){
     if (!source.gamepad) continue;
-    const axes = source.gamepad.axes;
-    const btns = source.gamepad.buttons;
-    const hand = source.handedness;
-
+    const a = source.gamepad.axes, b = source.gamepad.buttons, hand = source.handedness;
     if (hand==='left'){
-      const xAxis = axes[2] || 0, yAxis = axes[3] || 0;
-      const dz = 0.12;
+      const xAxis=a[2]||0, yAxis=a[3]||0, dz=0.12;
       if (Math.abs(xAxis)>dz || Math.abs(yAxis)>dz){
         const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(player.quaternion); fwd.y=0; fwd.normalize();
-        const right= new THREE.Vector3(1,0, 0).applyQuaternion(player.quaternion); right.y=0; right.normalize();
+        const right= new THREE.Vector3(1,0,0).applyQuaternion(player.quaternion); right.y=0; right.normalize();
         const tryPos = player.position.clone()
-          .addScaledVector(fwd, -yAxis * moveSpeed)
-          .addScaledVector(right,  xAxis * moveSpeed);
-
-        // Festungs-Kollision grob auf XZ
+          .addScaledVector(fwd, -yAxis*moveSpeed)
+          .addScaledVector(right, xAxis*moveSpeed);
         if (!isBlockedXZ(tryPos.x, tryPos.z)){
-          player.position.x = tryPos.x;
-          player.position.z = tryPos.z;
+          player.position.x = tryPos.x; player.position.z = tryPos.z;
         }
       }
-      const trig = btns[0]?.pressed;
+      const trig = b[0]?.pressed;
       if (trig && !leftTriggerDown){ leftTriggerDown=true; shoot(); }
       if (!trig) leftTriggerDown=false;
     }
-
     if (hand==='right'){
-      const xAxis = axes[2] || 0;
-      const dz = 0.12;
-      if (Math.abs(xAxis)>dz) player.rotation.y -= xAxis * rotationSpeed;
-      if (btns[4]?.pressed && !isJumping){ isJumping=true; jumpVel=jumpSpeed; }
+      const xAxis = a[2]||0, dz=0.12;
+      if (Math.abs(xAxis)>dz) player.rotation.y -= xAxis*rotationSpeed;
+      if (b[4]?.pressed && !isJumping){ isJumping=true; jumpVel=jumpSpeed; }
     }
   }
   updateJump();
@@ -424,9 +425,7 @@ function handleInput(){
 /*** === LOOP === ***/
 let last = performance.now();
 renderer.setAnimationLoop(()=>{
-  const now = performance.now();
-  const dt = now-last; last=now;
-
+  const now = performance.now(); const dt = now-last; last=now;
   handleInput();
   renderer.render(scene, camera);
 });
