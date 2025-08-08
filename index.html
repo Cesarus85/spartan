@@ -1,541 +1,446 @@
 <!DOCTYPE html>
 <html lang="de">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <title>Block-Halo – WebXR</title>
-    <style>
-      html,body { margin: 0; height: 100%; overflow: hidden; background:#000; }
-      canvas { display:block; }
-      #hint {
-        position: absolute; left: 12px; bottom: 12px; color: #ddd;
-        font: 12px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-        background: rgba(0,0,0,.45); padding: 8px 10px; border-radius: 8px;
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Block-Halo – Fast & Smooth</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden}
+  #hud{position:absolute;left:12px;bottom:12px;color:#ddd;background:rgba(0,0,0,.45);padding:8px 10px;border-radius:8px;font:12px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="hud"><b>Block-Halo</b><br>LS: Laufen · RS: Drehen · A: Springen · <b>LT: Schießen</b></div>
+<script type="module">
+import * as THREE from 'three';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+
+/*** === RENDERER/SCENE === ***/
+const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:'high-performance' });
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled = true;
+// Schatten optional (für Speed auf Quest: aus):
+const SHADOWS = false;
+renderer.shadowMap.enabled = SHADOWS;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+document.body.appendChild(VRButton.createButton(renderer));
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x9bc9ff, 40, 180);
+const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1200);
+
+const hemi = new THREE.HemisphereLight(0xbfdfff, 0x334455, 0.6);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffffff, SHADOWS ? 0.85 : 0.65);
+sun.position.set(120, 220, 60);
+if (SHADOWS) {
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(1024,1024);
+  sun.shadow.camera.far = 500;
+}
+scene.add(sun);
+
+/*** === PLAYER RIG === ***/
+const player = new THREE.Group();
+player.add(camera);
+scene.add(player);
+player.position.set(0, 1.0, 0);
+
+/*** === SKY + HALO RING === ***/
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(1000, 32, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    uniforms: {
+      top: {value:new THREE.Color(0x86c5ff)},
+      bottom:{value:new THREE.Color(0xbfe3ff)},
+      offset:{value:400}, exponent:{value:0.9}
+    },
+    vertexShader: `
+      varying vec3 vW;
+      void main(){ vec4 p=modelMatrix*vec4(position,1.0); vW=p.xyz;
+        gl_Position=projectionMatrix*viewMatrix*p; }`,
+    fragmentShader: `
+      varying vec3 vW; uniform vec3 top,bottom; uniform float offset,exponent;
+      void main(){ float h=normalize(vW+vec3(0.,offset,0.)).y;
+        float f=max(pow(max(h,0.0),exponent),0.0);
+        gl_FragColor=vec4(mix(bottom,top,f),1.0); }`
+  })
+);
+scene.add(sky);
+
+const ring = new THREE.Mesh(
+  new THREE.TorusGeometry(450, 10, 24, 128),
+  new THREE.MeshPhongMaterial({ color:0xbfdfff, emissive:0x224466, emissiveIntensity:0.25, shininess:60 })
+);
+ring.rotation.x = Math.PI*0.15;
+ring.rotation.z = Math.PI*0.07;
+ring.position.set(-60, 250, -80);
+scene.add(ring);
+
+/*** === MATERIALS & GEO === ***/
+const BLOCK = 0.75;
+const gBlock = new THREE.BoxGeometry(BLOCK, BLOCK, BLOCK);
+const mGrass  = new THREE.MeshStandardMaterial({ color:0x4aa64a, roughness:0.95, metalness:0.0 });
+const mDirt   = new THREE.MeshStandardMaterial({ color:0x7a5632, roughness:0.98, metalness:0.0 });
+const mRock   = new THREE.MeshStandardMaterial({ color:0x7b8a8f, roughness:0.9,  metalness:0.05 });
+const mSteel  = new THREE.MeshStandardMaterial({ color:0x667f8c, roughness:0.6,  metalness:0.6 });
+const mAccent = new THREE.MeshStandardMaterial({ color:0x2ec5ff, emissive:0x093a4a, emissiveIntensity:0.6, metalness:0.9, roughness:0.2 });
+
+/*** === INSTANCER HELPER === ***/
+class Instancer {
+  constructor(geo, mat, cap=50000){
+    this.mesh = new THREE.InstancedMesh(geo, mat, cap);
+    this.count = 0;
+  }
+  add(x,y,z){
+    const m = new THREE.Matrix4().makeTranslation(x,y,z);
+    this.mesh.setMatrixAt(this.count++, m);
+  }
+  finalize(scene){
+    this.mesh.instanceMatrix.needsUpdate = true;
+    this.mesh.count = this.count;
+    // InstancedMesh-Schatten aus Performancegründen aus
+    this.mesh.castShadow = false;
+    this.mesh.receiveShadow = SHADOWS && false;
+    scene.add(this.mesh);
+  }
+}
+const iGrass = new Instancer(gBlock, mGrass);
+const iDirt  = new Instancer(gBlock, mDirt);
+const iRock  = new Instancer(gBlock, mRock);
+const iSteel = new Instancer(gBlock, mSteel);
+const iAccent= new Instancer(gBlock, mAccent);
+const instancedWorld = []; // für Raycast
+
+/*** === TERRAIN (HEIGHTMAP) === ***/
+const radiusX = 48, radiusZ = 64;
+const sizeX = radiusX*2+1, sizeZ = radiusZ*2+1;
+const heightMap = new Int16Array(sizeX*sizeZ); // Höhen in Block-Layern
+
+function idx(ix,iz){ return (iz+radiusZ)*sizeX + (ix+radiusX); }
+function heightAt(ix,iz){
+  const nx = ix / radiusX, nz = iz / radiusZ;
+  const d = Math.sqrt(nx*nx + nz*nz);
+  if (d > 1.0) return 0;
+  const rim = Math.max(0, 1.0 - d);
+  const hill = Math.pow(rim, 1.5) * 8;
+  const cx = (ix*BLOCK), cz = (iz*BLOCK);
+  const flat = Math.max(0, 1.0 - (Math.hypot(cx,cz)/(BLOCK*18)));
+  const plateau = flat * 4.5;
+  const wav = (Math.sin(ix*0.35)+Math.cos(iz*0.29))*0.8 + Math.sin((ix+iz)*0.18)*0.6;
+  return Math.max(Math.floor(hill*0.5 + plateau + wav), 1);
+}
+
+// unsichtbare große Bodenplatte (nur als Fallback)
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(1000,1000),
+  new THREE.MeshStandardMaterial({ color:0x2e5b2f, roughness:1, metalness:0 })
+);
+ground.rotation.x = -Math.PI/2;
+ground.position.y = -BLOCK*0.5;
+ground.receiveShadow = SHADOWS;
+scene.add(ground);
+
+// Terrain instanzieren
+for (let ix=-radiusX; ix<=radiusX; ix++){
+  for (let iz=-radiusZ; iz<=radiusZ; iz++){
+    const h = heightAt(ix,iz);
+    heightMap[idx(ix,iz)] = h;
+    for (let y=0; y<h; y++){
+      const mat = (y===h-1) ? mGrass : (y>=h-3 ? mDirt : mRock);
+      const x = ix*BLOCK, z = iz*BLOCK, Y = y*BLOCK;
+      if (mat===mGrass) iGrass.add(x,Y,z);
+      else if (mat===mDirt) iDirt.add(x,Y,z);
+      else iRock.add(x,Y,z);
+    }
+  }
+}
+iGrass.finalize(scene); iDirt.finalize(scene); iRock.finalize(scene);
+instancedWorld.push(iGrass.mesh, iDirt.mesh, iRock.mesh);
+
+/*** === FORTRESS (INSTANCED) === ***/
+const F = { w: 22, d: 22, h: 14, baseY: 1, doorW:4, doorH:6 };
+const halfW = Math.floor(F.w/2), halfD = Math.floor(F.d/2);
+function inFortressAABB(x,z){
+  // Außenkiste der Mauern (in Weltkoords, nicht Layer)
+  const minX = (-halfW)*BLOCK, maxX = (halfW-1)*BLOCK;
+  const minZ = (-halfD)*BLOCK, maxZ = (halfD-1)*BLOCK;
+  return x>=minX && x<=maxX && z>=minZ && z<=maxZ;
+}
+function doorway(x,z){
+  // Türöffnung in der Mitte an z≈0 Richtung Süden/Norden
+  const minX = (-F.doorW/2)*BLOCK, maxX = (F.doorW/2-1)*BLOCK;
+  const nearZ = 0;
+  return (x>=minX && x<=maxX && Math.abs(z-nearZ) < BLOCK*1.1);
+}
+// Fundament
+for (let x=-halfW; x<halfW; x++){
+  for (let z=-halfD; z<halfD; z++){
+    iRock.add(x*BLOCK, (F.baseY-1)*BLOCK, z*BLOCK);
+  }
+}
+// Mauern + Innenboden
+for (let y=0; y<F.h; y++){
+  for (let x=-halfW; x<halfW; x++){
+    for (let z=-halfD; z<halfD; z++){
+      const isEdge = (x===-halfW || x===halfW-1 || z===-halfD || z===halfD-1);
+      const isDoor = (z===0 && x>=-F.doorW/2 && x<F.doorW/2 && y<F.doorH);
+      if (isEdge && !isDoor){
+        const matSel = (y%6===0) ? iAccent : iSteel;
+        matSel.add(x*BLOCK, (F.baseY+y)*BLOCK, z*BLOCK);
+      } else if (y===0) {
+        iRock.add(x*BLOCK, (F.baseY+y)*BLOCK, z*BLOCK);
       }
-    </style>
-    <script type="importmap">
-      {
-        "imports": {
-          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+}
+// Zinnen
+for (let x=-halfW; x<halfW; x+=2){
+  iSteel.add(x*BLOCK, (F.baseY+F.h)*BLOCK, -halfD*BLOCK);
+  iSteel.add(x*BLOCK, (F.baseY+F.h)*BLOCK, (halfD-1)*BLOCK);
+}
+for (let z=-halfD; z<halfD; z+=2){
+  iSteel.add(-halfW*BLOCK, (F.baseY+F.h)*BLOCK, z*BLOCK);
+  iSteel.add((halfW-1)*BLOCK, (F.baseY+F.h)*BLOCK, z*BLOCK);
+}
+// Innentreppe (Rampe)
+for (let i=0; i<F.h-2; i++){
+  iSteel.add((-halfW+2)*BLOCK, (F.baseY+1+i)*BLOCK, (-halfD+3+i)*BLOCK);
+}
+// Akzente
+for (let y=1; y<F.h-1; y+=3){
+  iAccent.add((-halfW+4)*BLOCK, (F.baseY+y)*BLOCK, 0);
+  iAccent.add((halfW-5)*BLOCK,   (F.baseY+y)*BLOCK, 0);
+}
+iSteel.finalize(scene); iAccent.finalize(scene);
+instancedWorld.push(iSteel.mesh, iAccent.mesh);
+
+/*** === SIMPLE GROUND HEIGHT QUERY === ***/
+function groundHeightAt(x,z){
+  // map (x,z) world -> nearest heightMap cell
+  const ix = Math.round(x / BLOCK);
+  const iz = Math.round(z / BLOCK);
+  if (ix<-radiusX || ix>radiusX || iz<-radiusZ || iz>radiusZ) return -BLOCK*0.5;
+  const hLayer = heightMap[idx(ix,iz)];
+  return (hLayer-0.5)*BLOCK;
+}
+
+/*** === CONTROLLERS & VISIBLE BODY === ***/
+const controllerL = renderer.xr.getController(0);
+const controllerR = renderer.xr.getController(1);
+scene.add(controllerL, controllerR);
+
+// Spartan Körper (Torso + Beinschatten-Attrappe)
+function makeSpartanBody(){
+  const g = new THREE.Group();
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.28,0.32,0.18), new THREE.MeshStandardMaterial({ color:0x2b3a43, metalness:0.5, roughness:0.4 }));
+  torso.position.set(0,-0.35,0.02);
+  g.add(torso);
+  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.30,0.10,0.22), mSteel);
+  chest.position.set(0,-0.25,0.00);
+  g.add(chest);
+  const belt = new THREE.Mesh(new THREE.BoxGeometry(0.30,0.08,0.18), mAccent);
+  belt.position.set(0,-0.48,0.01);
+  g.add(belt);
+  // „Beine“ als Dummy (optisch beim Runterschauen)
+  const pelvis = new THREE.Mesh(new THREE.BoxGeometry(0.26,0.12,0.20), mSteel);
+  pelvis.position.set(0,-0.58,0.02);
+  g.add(pelvis);
+  return g;
+}
+const spartanBody = makeSpartanBody();
+// an die Kamera hängen, damit man ihn beim Runterschauen sieht
+camera.add(spartanBody);
+
+// Linker Arm + Waffe (an Controller L)
+function makeLeftArmWithGun(){
+  const group = new THREE.Group();
+  const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.10,0.10,0.22), new THREE.MeshStandardMaterial({ color:0x556b78, metalness:0.4, roughness:0.5 }));
+  forearm.position.set(0,-0.02,-0.08);
+  group.add(forearm);
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.11,0.05,0.14), mAccent);
+  plate.position.set(0,-0.02,-0.02);
+  group.add(plate);
+  const gunBody = new THREE.Mesh(new THREE.BoxGeometry(0.06,0.08,0.26), new THREE.MeshStandardMaterial({ color:0x2f3940, metalness:0.75, roughness:0.3 }));
+  gunBody.position.set(0.05,0.00,-0.20);
+  group.add(gunBody);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.012,0.18,10), new THREE.MeshStandardMaterial({ color:0x444, metalness:0.9, roughness:0.2 }));
+  barrel.rotation.x = Math.PI/2;
+  barrel.position.set(0.05,0.00,-0.34);
+  group.add(barrel);
+  const sight = new THREE.Mesh(new THREE.BoxGeometry(0.05,0.02,0.07), mAccent);
+  sight.position.set(0.05,0.04,-0.20);
+  group.add(sight);
+  return group;
+}
+controllerL.add(makeLeftArmWithGun());
+
+// Rechte Hand blockig
+const rightHand = new THREE.Mesh(new THREE.BoxGeometry(0.08,0.03,0.12), mSteel);
+rightHand.position.set(0,-0.02,-0.05);
+controllerR.add(rightHand);
+
+/*** === MOVEMENT / PHYSICS (vereinfachte Kollision) === ***/
+const moveSpeed = 0.10, rotationSpeed = 0.05, jumpSpeed = 0.30, gravity = 0.01;
+let isJumping=false, jumpVel=0;
+
+function isBlockedXZ(x,z){
+  // Blockiere Festungsmauern, erlaube Tür
+  if (!inFortressAABB(x,z)) return false;
+  // Türfenster prüfen
+  if (doorway(x,z)) return false;
+  // innerhalb der Mauerdicke nahe Rand blockieren
+  const edgeTol = BLOCK*0.9;
+  const minX = (-halfW)*BLOCK, maxX=(halfW-1)*BLOCK;
+  const minZ = (-halfD)*BLOCK, maxZ=(halfD-1)*BLOCK;
+  const nearEdge = Math.min(Math.abs(x-minX), Math.abs(x-maxX), Math.abs(z-minZ), Math.abs(z-maxZ)) < edgeTol;
+  return nearEdge;
+}
+
+function updateJump(){
+  const gh = groundHeightAt(player.position.x, player.position.z);
+  const target = gh + 1.0; // Augenhöhe
+  if (isJumping){
+    const ny = player.position.y + jumpVel;
+    jumpVel -= gravity;
+    if (ny > target){
+      player.position.y = ny;
+    } else {
+      isJumping=false; jumpVel=0; player.position.y = target;
+    }
+  } else {
+    // weiches „Kleben“ am Boden
+    player.position.y += Math.sign(target - player.position.y) * Math.min(Math.abs(target-player.position.y), 0.08);
+  }
+}
+
+/*** === SHOOTING (Hitscan) === ***/
+const raycaster = new THREE.Raycaster();
+let leftTriggerDown=false, lastShot=0;
+
+function muzzlePose(ctrl){
+  const m = new THREE.Matrix4().copy(ctrl.matrixWorld);
+  const origin = new THREE.Vector3().setFromMatrixPosition(m);
+  const dir = new THREE.Vector3(0,0,-1).applyMatrix4(new THREE.Matrix4().extractRotation(m)).normalize();
+  const muzzle = origin.clone().add(dir.clone().multiplyScalar(0.24));
+  return {origin:muzzle, dir};
+}
+
+function shoot(){
+  const now = performance.now();
+  if (now - lastShot < 140) return;
+  lastShot = now;
+
+  const {origin, dir} = muzzlePose(controllerL);
+
+  // Hitscan gegen wenige InstancedMeshes -> schnell
+  raycaster.set(origin, dir);
+  const hits = raycaster.intersectObjects(instancedWorld, false);
+  if (hits.length){
+    spawnImpact(hits[0].point);
+  }
+
+  // sichtbarer „Bolt“ als Feedback (kurzlebig)
+  const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.01,0.01,0.22,8),
+    new THREE.MeshStandardMaterial({ color:0x7fe8ff, emissive:0x2ec5ff, emissiveIntensity:1.2, metalness:0.1, roughness:0.2 })
+  );
+  bolt.rotation.x = Math.PI/2;
+  const boltEnd = origin.clone().addScaledVector(dir, 0.5);
+  bolt.position.copy(origin);
+  scene.add(bolt);
+  const t0 = performance.now();
+  (function tick(){
+    const t = performance.now()-t0;
+    bolt.position.lerp(boltEnd, Math.min(1, t/80));
+    if (t<90) requestAnimationFrame(tick); else scene.remove(bolt);
+  })();
+
+  // Mündungsblitz
+  const flash = new THREE.Mesh(new THREE.SphereGeometry(0.03,8,6), new THREE.MeshBasicMaterial({ color:0x9df0ff }));
+  flash.position.copy(origin);
+  scene.add(flash);
+  setTimeout(()=>scene.remove(flash), 40);
+}
+
+function spawnImpact(p){
+  const s = new THREE.Mesh(new THREE.SphereGeometry(0.03,6,4), new THREE.MeshBasicMaterial({ color:0x9df0ff }));
+  s.position.copy(p);
+  scene.add(s);
+  setTimeout(()=>scene.remove(s), 100);
+}
+
+/*** === INPUT === ***/
+function handleInput(){
+  const session = renderer.xr.getSession();
+  if (!session){ updateJump(); return; }
+
+  for (const source of session.inputSources){
+    if (!source.gamepad) continue;
+    const axes = source.gamepad.axes;
+    const btns = source.gamepad.buttons;
+    const hand = source.handedness;
+
+    if (hand==='left'){
+      const xAxis = axes[2] || 0, yAxis = axes[3] || 0;
+      const dz = 0.12;
+      if (Math.abs(xAxis)>dz || Math.abs(yAxis)>dz){
+        const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(player.quaternion); fwd.y=0; fwd.normalize();
+        const right= new THREE.Vector3(1,0, 0).applyQuaternion(player.quaternion); right.y=0; right.normalize();
+        const tryPos = player.position.clone()
+          .addScaledVector(fwd, -yAxis * moveSpeed)
+          .addScaledVector(right,  xAxis * moveSpeed);
+
+        // Festungs-Kollision grob auf XZ
+        if (!isBlockedXZ(tryPos.x, tryPos.z)){
+          player.position.x = tryPos.x;
+          player.position.z = tryPos.z;
         }
       }
-    </script>
-  </head>
-  <body>
-    <div id="hint">
-      <b>Block-Halo</b><br>
-      Linker Stick: Laufen · Rechter Stick: Drehen · A: Springen · <b>Linker Trigger: Schießen</b>
-    </div>
-    <script type="module">
-      import * as THREE from 'three';
-      import { VRButton } from 'three/addons/webxr/VRButton.js';
+      const trig = btns[0]?.pressed;
+      if (trig && !leftTriggerDown){ leftTriggerDown=true; shoot(); }
+      if (!trig) leftTriggerDown=false;
+    }
 
-      // ===== Grundsetup =======================================================
-      const scene = new THREE.Scene();
-      scene.fog = new THREE.Fog(0x9bc9ff, 40, 180);
+    if (hand==='right'){
+      const xAxis = axes[2] || 0;
+      const dz = 0.12;
+      if (Math.abs(xAxis)>dz) player.rotation.y -= xAxis * rotationSpeed;
+      if (btns[4]?.pressed && !isJumping){ isJumping=true; jumpVel=jumpSpeed; }
+    }
+  }
+  updateJump();
+}
 
-      const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1200);
-      const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:'high-performance' });
-      renderer.setSize(innerWidth, innerHeight);
-      renderer.xr.enabled = true;
-      renderer.shadowMap.enabled = true;
-      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-      document.body.appendChild(renderer.domElement);
-      document.body.appendChild(VRButton.createButton(renderer));
+/*** === LOOP === ***/
+let last = performance.now();
+renderer.setAnimationLoop(()=>{
+  const now = performance.now();
+  const dt = now-last; last=now;
 
-      // Licht
-      const hemi = new THREE.HemisphereLight(0xbfdfff, 0x334455, 0.55);
-      scene.add(hemi);
-      const sun = new THREE.DirectionalLight(0xffffff, 0.85);
-      sun.position.set(120, 220, 60);
-      sun.castShadow = true;
-      sun.shadow.mapSize.set(2048,2048);
-      sun.shadow.camera.near = 1; sun.shadow.camera.far = 600;
-      sun.shadow.camera.left = -180; sun.shadow.camera.right = 180;
-      sun.shadow.camera.top = 180; sun.shadow.camera.bottom = -180;
-      scene.add(sun);
+  handleInput();
+  renderer.render(scene, camera);
+});
 
-      // Spieler (wie Vorlage): Gruppe hält Kamera & Position/Rotation
-      const player = new THREE.Group();
-      player.add(camera);
-      scene.add(player);
-      player.position.set(0, 1.0, 0); // ~2 Blöcke hoch (Fußboden + 1.0)
+/*** === RESIZE === ***/
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
 
-      // ===== Himmel & Halo-Ring ==============================================
-      // Leichter Verlaufshimmel
-      const skyGeo = new THREE.SphereGeometry(1000, 32, 16);
-      const skyMat = new THREE.ShaderMaterial({
-        side: THREE.BackSide,
-        uniforms: { top: {value:new THREE.Color(0x86c5ff)}, bottom:{value:new THREE.Color(0xbfe3ff)}, offset:{value:400}, exponent:{value:0.9} },
-        vertexShader: `
-          varying vec3 vWorldPosition;
-          void main(){
-            vec4 p = modelMatrix * vec4(position,1.0);
-            vWorldPosition = p.xyz;
-            gl_Position = projectionMatrix * viewMatrix * p;
-          }
-        `,
-        fragmentShader: `
-          varying vec3 vWorldPosition;
-          uniform vec3 top; uniform vec3 bottom; uniform float offset; uniform float exponent;
-          void main(){
-            float h = normalize(vWorldPosition + offset).y;
-            float f = max(pow(max(h,0.0), exponent), 0.0);
-            gl_FragColor = vec4(mix(bottom, top, f), 1.0);
-          }
-        `
-      });
-      const sky = new THREE.Mesh(skyGeo, skyMat);
-      scene.add(sky);
-
-      // Fern sichtbarer Ring (Ringwelt/Halo)
-      const ring = new THREE.Mesh(
-        new THREE.TorusGeometry(450, 10, 24, 128),
-        new THREE.MeshPhongMaterial({ color:0xbfdfff, emissive:0x224466, emissiveIntensity:0.25, shininess: 60 })
-      );
-      ring.rotation.x = Math.PI * 0.15;
-      ring.rotation.z = Math.PI * 0.07;
-      ring.position.set(-60, 250, -80);
-      scene.add(ring);
-
-      // ===== Block-Materialien & Geos ========================================
-      const BLOCK = 0.75; // etwas feiner als 1.0 für mehr „Charm“
-      const geoBlock = new THREE.BoxGeometry(BLOCK, BLOCK, BLOCK);
-
-      const matGrass  = new THREE.MeshStandardMaterial({ color:0x4aa64a, roughness:0.9, metalness:0.0 });
-      const matDirt   = new THREE.MeshStandardMaterial({ color:0x7a5632, roughness:0.95, metalness:0.0 });
-      const matRock   = new THREE.MeshStandardMaterial({ color:0x7b8a8f, roughness:0.85, metalness:0.05 });
-      const matSteel  = new THREE.MeshStandardMaterial({ color:0x667f8c, roughness:0.6, metalness:0.6 });
-      const matAccent = new THREE.MeshStandardMaterial({ color:0x2ec5ff, emissive:0x093a4a, emissiveIntensity:0.6, metalness:0.9, roughness:0.2 });
-
-      // Datenspeicher
-      const blocks = new Map(); // key "x,y,z" -> Mesh
-      const keyOf = (x,y,z)=>`${x},${y},${z}`;
-
-      // ===== Terrain (Insel) ==================================================
-      // Eine leicht ovale Insel mit sanften Hügeln und zentraler Ebene
-      const SIZE = 120;             // Gesamtgröße
-      const HALF = SIZE/2;
-      const step = BLOCK;           // Raster = Blockgröße
-      const radiusX = 48, radiusZ = 64;
-
-      function addBlock(x,y,z,mat, recvShadow=true){
-        const m = new THREE.Mesh(geoBlock, mat);
-        m.castShadow = true; if (recvShadow) m.receiveShadow = true;
-        m.position.set(x*BLOCK, y*BLOCK, z*BLOCK);
-        scene.add(m);
-        blocks.set(keyOf(x,y,z), m);
-        return m;
-      }
-
-      // Bodenplatte (unsichtbar, für Schatten)
-      const ground = new THREE.Mesh(
-        new THREE.PlaneGeometry(1000,1000),
-        new THREE.MeshStandardMaterial({ color:0x2e5b2f, roughness:1, metalness:0 })
-      );
-      ground.rotation.x = -Math.PI/2;
-      ground.position.y = -BLOCK*0.5;
-      ground.receiveShadow = true;
-      scene.add(ground);
-
-      // Höhe in "Block-Schichten"
-      function heightAt(x,z){
-        // Ovales „Ufer“
-        const nx = x / radiusX, nz = z / radiusZ;
-        const d = Math.sqrt(nx*nx + nz*nz);
-        if (d > 1.0) return -Infinity;
-        // Sanfter Hügelrand + flache Mitte
-        const rim = Math.max(0, 1.0 - d);
-        const hill = Math.pow(rim, 1.5) * 8; // max 8 Layer
-        // zentrale Ebene:
-        const cx = (x*BLOCK), cz = (z*BLOCK);
-        const flat = Math.max(0, 1.0 - (Math.hypot(cx,cz)/(BLOCK*18)));
-        const plateau = flat * 4.5; // bis 4-5 Layer
-        // noise-ähnliche Wellen
-        const wav = (Math.sin(x*0.35) + Math.cos(z*0.29))*0.8 + (Math.sin((x+z)*0.18))*0.6;
-        return Math.floor(Math.max(hill*0.5 + plateau + wav, 0));
-      }
-
-      // Insel aufbauen
-      for (let x = -radiusX; x <= radiusX; x++){
-        for (let z = -radiusZ; z <= radiusZ; z++){
-          const h = heightAt(x,z);
-          if (!isFinite(h) || h<=0) continue;
-          for (let y = 0; y < h; y++){
-            const top = (y === h-1);
-            const mat = top ? matGrass : (y>=h-3 ? matDirt : matRock);
-            addBlock(x, y, z, mat);
-          }
-        }
-      }
-
-      // ===== Zentrale Festung (begehbar) =====================================
-      // Ein Keep mit Eingang, Innenraum, Treppe zum Dach und leichten Sci-Fi-Akzenten
-      const F = { w: 22, d: 22, h: 14 };  // Breite, Tiefe, Höhe in Block-Layern
-      const BASE_Y = 1;                   // Ebene beginnt leicht über Terrain
-      const doorW = 4, doorH = 6;
-
-      function inRect(ix,iz,w,d){ return ix>=0 && ix<w && iz>=0 && iz<d; }
-
-      // Fundament leicht erhöht
-      for (let x=-F.w/2; x<F.w/2; x++){
-        for (let z=-F.d/2; z<F.d/2; z++){
-          addBlock(x, BASE_Y-1, z, matRock);
-        }
-      }
-
-      // Mauern + Innenraum
-      for (let y=0; y<F.h; y++){
-        for (let x=-F.w/2; x<F.w/2; x++){
-          for (let z=-F.d/2; z<F.d/2; z++){
-            const isEdge = (x===-F.w/2 || x===F.w/2-1 || z===-F.d/2 || z===F.d/2-1);
-            const isDoor = (z===0 && x>=-doorW/2 && x<doorW/2 && y<doorH);
-            if (isEdge && !isDoor) {
-              const mat = (y%6===0) ? matAccent : matSteel;
-              addBlock(x, BASE_Y+y, z, mat);
-            } else if (y===0) {
-              // Innenboden
-              addBlock(x, BASE_Y+y, z, matRock, true);
-            }
-          }
-        }
-      }
-
-      // Zinnen auf dem Dach
-      for (let x=-F.w/2; x<F.w/2; x+=2){
-        addBlock(x, BASE_Y+F.h, -F.d/2, matSteel);
-        addBlock(x, BASE_Y+F.h, F.d/2-1, matSteel);
-      }
-      for (let z=-F.d/2; z<F.d/2; z+=2){
-        addBlock(-F.w/2, BASE_Y+F.h, z, matSteel);
-        addBlock(F.w/2-1, BASE_Y+F.h, z, matSteel);
-      }
-
-      // Treppe innen (simple Rampe entlang einer Wand)
-      for (let i=0; i< F.h-2; i++){
-        addBlock(-F.w/2+2, BASE_Y+1+i, -F.d/2+3+i, matSteel);
-      }
-
-      // Ein paar „Säulen“-Akzente innen
-      for (let y=1; y< F.h-1; y+=3){
-        addBlock(-F.w/2+4, BASE_Y+y, 0, matAccent);
-        addBlock(F.w/2-5,  BASE_Y+y, 0, matAccent);
-      }
-
-      // ===== Controller & Spartan-Linker Arm mit Waffe =======================
-      const controllerL = renderer.xr.getController(0);
-      const controllerR = renderer.xr.getController(1);
-      scene.add(controllerL, controllerR);
-
-      // Spartan-Unterarm (blockig) + „BR“-artige Waffe
-      function makeLeftArmWithGun(){
-        const group = new THREE.Group();
-
-        // Unterarm
-        const forearm = new THREE.Mesh(
-          new THREE.BoxGeometry(0.10, 0.10, 0.22),
-          new THREE.MeshStandardMaterial({ color:0x556b78, metalness:0.4, roughness:0.5 })
-        );
-        forearm.position.set(0, -0.02, -0.08);
-        forearm.castShadow = true;
-        group.add(forearm);
-
-        // Handschiene / Panzerplatte
-        const plate = new THREE.Mesh(
-          new THREE.BoxGeometry(0.11, 0.05, 0.14),
-          matAccent
-        );
-        plate.position.set(0, -0.02, -0.02);
-        group.add(plate);
-
-        // Waffe: blockiger Receiver
-        const gunBody = new THREE.Mesh(
-          new THREE.BoxGeometry(0.06, 0.08, 0.26),
-          new THREE.MeshStandardMaterial({ color:0x2f3940, metalness:0.75, roughness:0.3 })
-        );
-        gunBody.position.set(0.05, 0.00, -0.20);
-        gunBody.castShadow = true;
-        group.add(gunBody);
-
-        // Lauf
-        const barrel = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.012, 0.012, 0.18, 10),
-          new THREE.MeshStandardMaterial({ color:0x444, metalness:0.9, roughness:0.2 })
-        );
-        barrel.rotation.x = Math.PI/2;
-        barrel.position.set(0.05, 0.00, -0.34);
-        group.add(barrel);
-
-        // Visierblock
-        const sight = new THREE.Mesh(
-          new THREE.BoxGeometry(0.05, 0.02, 0.07),
-          matAccent
-        );
-        sight.position.set(0.05, 0.04, -0.20);
-        group.add(sight);
-
-        return group;
-      }
-      const leftArmGun = makeLeftArmWithGun();
-      controllerL.add(leftArmGun);
-
-      // Rechten Controller minimal sichtbar machen (Block-Hand)
-      const rightBlockHand = new THREE.Mesh(new THREE.BoxGeometry(0.08,0.03,0.12), matSteel);
-      rightBlockHand.position.set(0, -0.02, -0.05);
-      controllerR.add(rightBlockHand);
-
-      // ===== Bewegung / Physik (wie Vorlage, behutsam angepasst) =============
-      const moveSpeed = 0.10;     // Vorlagewert
-      const rotationSpeed = 0.05; // Vorlagewert
-      const jumpSpeed = 0.30;
-      let isJumping = false, jumpVelocity = 0;
-      const gravity = 0.01;
-
-      // Kollisionsprüfung (Zylinder grob gegen Blöcke)
-      function checkCollision(pos){
-        const r = 0.30;  // Spieler-Radius
-        const h = 1.0;   // Höhe über Fuß
-        for (const m of blocks.values()){
-          const bp = m.position;
-          const dx = Math.abs(pos.x - bp.x);
-          const dz = Math.abs(pos.z - bp.z);
-          const dy = pos.y - (bp.y + BLOCK/2);
-          if (dx < (BLOCK/2 + r) && dz < (BLOCK/2 + r) && dy < h && dy > -0.1) return true;
-        }
-        return false;
-      }
-
-      function groundHeightAt(x,z){
-        let maxY = -BLOCK/2; // Bodenplatte
-        for (const m of blocks.values()){
-          const bp = m.position;
-          if (Math.abs(x - bp.x) < BLOCK*0.8 && Math.abs(z - bp.z) < BLOCK*0.8){
-            const top = bp.y + BLOCK/2;
-            if (top > maxY) maxY = top;
-          }
-        }
-        return maxY;
-      }
-
-      function updateJump(){
-        const gh = groundHeightAt(player.position.x, player.position.z);
-        const target = gh + 1.0; // Kopf bei ~2 Blöcken
-        if (isJumping){
-          const ny = player.position.y + jumpVelocity;
-          jumpVelocity -= gravity;
-          const test = player.position.clone(); test.y = ny;
-          if (!checkCollision(test) && ny > target){
-            player.position.y = ny;
-          } else {
-            player.position.y = Math.max(target, player.position.y);
-            isJumping = false; jumpVelocity = 0;
-          }
-        } else {
-          if (player.position.y > target + 0.1){
-            player.position.y -= 0.1;
-          } else {
-            player.position.y = target;
-          }
-        }
-      }
-
-      // ===== Schießen (linker Trigger) =======================================
-      const raycaster = new THREE.Raycaster();
-      const projectiles = new Set();
-      let leftTriggerDown = false;
-      let lastShotAt = 0;
-
-      function muzzleWorldPose(ctrl){
-        // Mündung etwas vor dem Lauf
-        const m = new THREE.Matrix4().copy(ctrl.matrixWorld);
-        const origin = new THREE.Vector3().setFromMatrixPosition(m);
-        const dir = new THREE.Vector3(0,0,-1).applyMatrix4(new THREE.Matrix4().extractRotation(m)).normalize();
-        const muzzle = origin.clone().add(dir.clone().multiplyScalar(0.24)); // vor dem Lauf
-        return { origin:muzzle, dir };
-      }
-
-      function shoot(){
-        const now = performance.now();
-        if (now - lastShotAt < 140) return; // kleine Feuerrate
-        lastShotAt = now;
-
-        const {origin, dir} = muzzleWorldPose(controllerL);
-
-        // Sofortiger Ray-Hit (Hitscan) + kleine Partikel, UND sichtbarer „Bolt“, der fliegt
-        // Raycast gegen Blockwelt
-        raycaster.set(origin, dir);
-        const intersects = raycastBlocks();
-        if (intersects.length){
-          const hit = intersects[0];
-          // 20% Chance: Block „wegschießen“ (destructible feel)
-          if (Math.random() < 0.2){
-            const k = keyOf(Math.round(hit.object.position.x/BLOCK),
-                            Math.round(hit.object.position.y/BLOCK),
-                            Math.round(hit.object.position.z/BLOCK));
-            const obj = blocks.get(k);
-            if (obj){ scene.remove(obj); blocks.delete(k); }
-          }
-          spawnImpact(hit.point, hit.face?.normal);
-        }
-
-        // Sichtbarer Bolt
-        const bolt = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.01,0.01,0.22, 8),
-          new THREE.MeshStandardMaterial({ color:0x7fe8ff, emissive:0x2ec5ff, emissiveIntensity:1.2, metalness:0.1, roughness:0.2 })
-        );
-        bolt.rotation.x = Math.PI/2;
-        bolt.castShadow = false;
-        scene.add(bolt);
-        projectiles.add({ mesh: bolt, pos: origin.clone(), dir: dir.clone(), life: 0 });
-
-        // Mündungsblitz
-        const flash = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 6),
-          new THREE.MeshBasicMaterial({ color:0x9df0ff })
-        );
-        flash.position.copy(origin);
-        scene.add(flash);
-        setTimeout(()=>scene.remove(flash), 40);
-      }
-
-      function raycastBlocks(){
-        // intersectObjects(Object.values(blocks)) ist teuer; wir sammeln einmal:
-        _tmp.length = 0;
-        for (const m of blocks.values()) _tmp.push(m);
-        return raycaster.intersectObjects(_tmp, false);
-      }
-      const _tmp = [];
-
-      function spawnImpact(point, normal){
-        const p = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 4),
-          new THREE.MeshBasicMaterial({ color:0x9df0ff })
-        );
-        p.position.copy(point);
-        scene.add(p);
-        setTimeout(()=>scene.remove(p), 120);
-
-        // kleine Splitter
-        for (let i=0;i<4;i++){
-          const s = new THREE.Mesh(new THREE.SphereGeometry(0.01, 6, 4),
-            new THREE.MeshBasicMaterial({ color:0x7fe8ff })
-          );
-          s.position.copy(point);
-          scene.add(s);
-          const v = new THREE.Vector3(
-            (Math.random()-0.5)*0.12,
-            Math.random()*0.15,
-            (Math.random()-0.5)*0.12
-          );
-          const t0 = performance.now();
-          const tick = ()=>{
-            const t = performance.now()-t0;
-            s.position.addScaledVector(v, 0.98);
-            v.y -= 0.005;
-            if (t<180) requestAnimationFrame(tick); else scene.remove(s);
-          };
-          requestAnimationFrame(tick);
-        }
-      }
-
-      // ===== Eingaben verarbeiten (wie Vorlage) ==============================
-      function handleInput(){
-        const session = renderer.xr.getSession();
-        if (!session) { updateJump(); return; }
-
-        for (const source of session.inputSources){
-          if (!source.gamepad) continue;
-          const axes = source.gamepad.axes;
-          const buttons = source.gamepad.buttons;
-          const hand = source.handedness;
-
-          if (hand === 'left'){
-            // Bewegung
-            const xAxis = axes[2] || 0;
-            const yAxis = axes[3] || 0;
-            const dz = 0.1;
-            if (Math.abs(xAxis)>dz || Math.abs(yAxis)>dz){
-              const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(player.quaternion); fwd.y = 0; fwd.normalize();
-              const right = new THREE.Vector3(1,0, 0).applyQuaternion(player.quaternion); right.y = 0; right.normalize();
-
-              const newPos = player.position.clone()
-                .addScaledVector(fwd, -yAxis * moveSpeed)
-                .addScaledVector(right,  xAxis * moveSpeed);
-              if (!checkCollision(newPos)) player.position.copy(newPos);
-            }
-
-            // Linker Trigger schießen
-            const trig = buttons[0]?.pressed;
-            if (trig && !leftTriggerDown){ leftTriggerDown = true; shoot(); }
-            if (!trig) leftTriggerDown = false;
-          }
-
-          if (hand === 'right'){
-            // Rotation
-            const xAxis = axes[2] || 0;
-            const dz = 0.1;
-            if (Math.abs(xAxis)>dz) player.rotation.y -= xAxis * rotationSpeed;
-
-            // A-Taste = Jump (typisch Button[4] auf Quest)
-            if (buttons[4]?.pressed && !isJumping){ isJumping = true; jumpVelocity = jumpSpeed; }
-          }
-        }
-        updateJump();
-      }
-
-      // ===== Render/Update Loop ==============================================
-      function updateProjectiles(dt){
-        // einfache lineare Bewegung, kurze Lebenszeit
-        for (const p of Array.from(projectiles)){
-          p.life += dt;
-          p.pos.addScaledVector(p.dir, 0.55); // Geschossgeschwindigkeit
-          if (p.mesh){
-            p.mesh.position.copy(p.pos);
-            p.mesh.lookAt(p.pos.clone().add(p.dir));
-          }
-          // Kollision checken
-          raycaster.set(p.pos, p.dir);
-          const hit = raycastBlocks()[0];
-          if (hit){
-            spawnImpact(hit.point, hit.face?.normal);
-            // kleine Chance Block zerstören
-            if (Math.random() < 0.15){
-              const k = keyOf(Math.round(hit.object.position.x/BLOCK),
-                              Math.round(hit.object.position.y/BLOCK),
-                              Math.round(hit.object.position.z/BLOCK));
-              const obj = blocks.get(k);
-              if (obj){ scene.remove(obj); blocks.delete(k); }
-            }
-            scene.remove(p.mesh); projectiles.delete(p);
-            continue;
-          }
-          if (p.life > 1000){ // 1s
-            scene.remove(p.mesh); projectiles.delete(p);
-          }
-        }
-      }
-
-      let last = performance.now();
-      renderer.setAnimationLoop(()=>{
-        const now = performance.now();
-        const dt = now - last; last = now;
-
-        handleInput();
-        updateProjectiles(dt);
-
-        renderer.render(scene, camera);
-      });
-
-      // ===== Resize ===========================================================
-      addEventListener('resize', ()=>{
-        camera.aspect = innerWidth/innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(innerWidth, innerHeight);
-      });
-
-      // ===== Spawn-Startpunkt leicht versetzt ================================
-      // Vor der Festung spawnen
-      player.position.set(0, 1.0, 18*BLOCK);
-      player.rotation.y = Math.PI; // Blick Richtung Festung
-    </script>
-  </body>
+/*** === START POSITION === ***/
+player.position.set(0, 1.0, 18*BLOCK);
+player.rotation.y = Math.PI; // Blick zur Festung
+</script>
+</body>
 </html>
